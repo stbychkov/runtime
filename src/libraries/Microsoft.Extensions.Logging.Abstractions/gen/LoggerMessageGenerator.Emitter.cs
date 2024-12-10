@@ -3,6 +3,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text;
 using System.Threading;
 
@@ -52,6 +53,8 @@ namespace Microsoft.Extensions.Logging.Generators
                 bool result =
                     (lm.TemplateParameters.Count <= MaxLoggerMessageDefineArguments) && // more args than LoggerMessage.Define can handle
                     (lm.Level != null) &&                                               // dynamic log level, which LoggerMessage.Define can't handle
+                    (lm.EventId.HasValue || !string.IsNullOrEmpty(lm.EventName) ||      // dynamic event id, which LoggerMessage.Define can't handle
+                     lm.AllParameters.All(p => !p.IsEventId)) &&
                     (lm.TemplateList.Count == lm.TemplateParameters.Count);             // mismatch in template to args, which LoggerMessage.Define can't handle
 
                 if (result)
@@ -372,7 +375,7 @@ namespace {lc.Namespace}
             {
                 string level = GetLogLevel(lm);
                 string extension = lm.IsExtensionMethod ? "this " : string.Empty;
-                string eventName = string.IsNullOrWhiteSpace(lm.EventName) ? $"nameof({lm.Name})" : $"\"{lm.EventName}\"";
+                string eventId = GetEventId(lm);
                 string exceptionArg = GetException(lm);
                 string logger = GetLogger(lm);
 
@@ -389,7 +392,7 @@ namespace {lc.Namespace}
 
                     GenDefineTypes(lm, brackets: true);
 
-                    _builder.Append(@$"({level}, new global::Microsoft.Extensions.Logging.EventId({lm.EventId}, {eventName}), ""{ConvertEndOfLineAndQuotationCharactersToEscapeForm(lm.Message)}"", new global::Microsoft.Extensions.Logging.LogDefineOptions() {{ SkipEnabledCheck = true }}); 
+                    _builder.Append(@$"({level}, {eventId}, ""{ConvertEndOfLineAndQuotationCharactersToEscapeForm(lm.Message)}"", new global::Microsoft.Extensions.Logging.LogDefineOptions() {{ SkipEnabledCheck = true }});
 ");
                 }
 
@@ -424,7 +427,7 @@ namespace {lc.Namespace}
                     _builder.Append($@"
             {nestedIndentation}{enabledCheckIndentation}{logger}.Log(
                 {nestedIndentation}{enabledCheckIndentation}{level},
-                {nestedIndentation}{enabledCheckIndentation}new global::Microsoft.Extensions.Logging.EventId({lm.EventId}, {eventName}),
+                {nestedIndentation}{enabledCheckIndentation}{eventId},
                 {nestedIndentation}{enabledCheckIndentation}");
                 GenHolder(lm);
                 _builder.Append($@",
@@ -500,6 +503,25 @@ namespace {lc.Namespace}
                     }
 
                     return level;
+                }
+
+                static string GetEventId(LoggerMethod lm)
+                {
+                    if (!lm.EventId.HasValue && string.IsNullOrEmpty(lm.EventName))
+                    {
+                        foreach (LoggerParameter p in lm.AllParameters)
+                        {
+                            if (p.IsEventId)
+                            {
+                                return p.Name;
+                            }
+                        }
+
+                    }
+
+                    int eventId = lm.EventId ?? GetNonRandomizedHashCode(string.IsNullOrWhiteSpace(lm.EventName) ? lm.Name : lm.EventName);
+                    string eventName = string.IsNullOrWhiteSpace(lm.EventName) ? $"nameof({lm.Name})" : $"\"{lm.EventName}\"";
+                    return $"new global::Microsoft.Extensions.Logging.EventId({eventId}, {eventName})";
                 }
             }
 

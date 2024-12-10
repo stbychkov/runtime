@@ -57,6 +57,13 @@ namespace Microsoft.Extensions.Logging.Generators
                     return Array.Empty<LoggerClass>();
                 }
 
+                INamedTypeSymbol? eventIdSymbol = _compilation.GetBestTypeByMetadataName("Microsoft.Extensions.Logging.EventId");
+                if (eventIdSymbol == null)
+                {
+                    // nothing to do if this type isn't available
+                    return Array.Empty<LoggerClass>();
+                }
+
                 INamedTypeSymbol? exceptionSymbol = _compilation.GetBestTypeByMetadataName("System.Exception");
                 if (exceptionSymbol == null)
                 {
@@ -102,8 +109,7 @@ namespace Microsoft.Extensions.Logging.Generators
 
                             IMethodSymbol logMethodSymbol = sm.GetDeclaredSymbol(method, _cancellationToken)!;
                             Debug.Assert(logMethodSymbol != null, "log method is present.");
-                            (int eventId, int? level, string message, string? eventName, bool skipEnabledCheck) = (-1, null, string.Empty, null, false);
-                            bool suppliedEventId = false;
+                            (int? eventId, int? level, string message, string? eventName, bool skipEnabledCheck) = (null, null, string.Empty, null, false);
 
                             foreach (AttributeListSyntax mal in method.AttributeLists)
                             {
@@ -173,7 +179,6 @@ namespace Microsoft.Extensions.Logging.Generators
                                                     // LoggerMessageAttribute(int eventId, LogLevel level, string message)
                                                     if (!items[0].IsNull)
                                                     {
-                                                        suppliedEventId = true;
                                                         eventId = (int)GetItem(items[0]);
                                                     }
                                                     level = items[1].IsNull ? null : (int?)GetItem(items[1]);
@@ -205,7 +210,6 @@ namespace Microsoft.Extensions.Logging.Generators
                                                     {
                                                         case "EventId":
                                                             eventId = (int)GetItem(value);
-                                                            suppliedEventId = true;
                                                             break;
                                                         case "Level":
                                                             level = value.IsNull ? null : (int?)GetItem(value);
@@ -229,11 +233,6 @@ namespace Microsoft.Extensions.Logging.Generators
                                     {
                                         // skip further generator execution and let compiler generate the errors
                                         break;
-                                    }
-
-                                    if (!suppliedEventId)
-                                    {
-                                        eventId = GetNonRandomizedHashCode(string.IsNullOrWhiteSpace(eventName) ? logMethodSymbol.Name : eventName);
                                     }
 
                                     var lm = new LoggerMethod
@@ -308,7 +307,7 @@ namespace Microsoft.Extensions.Logging.Generators
 
                                     // ensure there are no duplicate event ids.
                                     // We don't check Id duplication for the auto-generated event id.
-                                    if (suppliedEventId && !eventIds.Add(lm.EventId))
+                                    if (lm.EventId.HasValue && !eventIds.Add(lm.EventId.Value))
                                     {
                                         Diag(DiagnosticDescriptors.ShouldntReuseEventIds, ma.GetLocation(), lm.EventId, classDec.Identifier.Text);
                                     }
@@ -333,6 +332,7 @@ namespace Microsoft.Extensions.Logging.Generators
                                     bool foundLogger = false;
                                     bool foundException = false;
                                     bool foundLogLevel = level != null;
+                                    bool foundEventId = eventId.HasValue;
                                     foreach (IParameterSymbol paramSymbol in logMethodSymbol.Parameters)
                                     {
                                         string paramName = paramSymbol.Name;
@@ -389,12 +389,14 @@ namespace Microsoft.Extensions.Logging.Generators
                                             IsLogger = !foundLogger && IsBaseOrIdentity(paramTypeSymbol, loggerSymbol),
                                             IsException = !foundException && IsBaseOrIdentity(paramTypeSymbol, exceptionSymbol),
                                             IsLogLevel = !foundLogLevel && IsBaseOrIdentity(paramTypeSymbol, logLevelSymbol),
+                                            IsEventId = !foundEventId && IsBaseOrIdentity(paramTypeSymbol, eventIdSymbol),
                                             IsEnumerable = IsBaseOrIdentity(paramTypeSymbol, enumerableSymbol) && !IsBaseOrIdentity(paramTypeSymbol, stringSymbol),
                                         };
 
                                         foundLogger |= lp.IsLogger;
                                         foundException |= lp.IsException;
                                         foundLogLevel |= lp.IsLogLevel;
+                                        foundEventId |= lp.IsEventId;
 
                                         bool forceAsTemplateParams = false;
                                         if (lp.IsLogger && lm.TemplateMap.ContainsKey(paramName))
@@ -879,7 +881,7 @@ namespace Microsoft.Extensions.Logging.Generators
             public string UniqueName = string.Empty;
             public string Message = string.Empty;
             public int? Level;
-            public int EventId;
+            public int? EventId;
             public string? EventName;
             public bool IsExtensionMethod;
             public string Modifiers = string.Empty;
@@ -899,10 +901,11 @@ namespace Microsoft.Extensions.Logging.Generators
             public bool IsLogger;
             public bool IsException;
             public bool IsLogLevel;
+            public bool IsEventId;
             public bool IsEnumerable;
             // A parameter flagged as IsTemplateParameter is not going to be taken care of specially as an argument to ILogger.Log
             // but instead is supposed to be taken as a parameter for the template.
-            public bool IsTemplateParameter => !IsLogger && !IsException && !IsLogLevel;
+            public bool IsTemplateParameter => !IsLogger && !IsException && !IsLogLevel && !IsEventId;
         }
 
         /// <summary>
